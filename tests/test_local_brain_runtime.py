@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from local_brain_runtime import (
@@ -5,7 +6,9 @@ from local_brain_runtime import (
     ContextSwitchError,
     HTTPResult,
     LocalBrainRuntime,
+    LocalBrainRuntimeError,
     ServerProbe,
+    _fallback_text_token_estimate,
 )
 
 
@@ -46,6 +49,43 @@ class FailingSwitchRuntime(LocalBrainRuntime):
         return ServerProbe(True, context, False, "fake")
 
 
+class ProbeRuntime(LocalBrainRuntime):
+    def __init__(self, probes, token_count=1_000):
+        super().__init__(probe=False)
+        self.context.current_context = 65_536
+        self.probes = list(probes)
+        self.token_count = token_count
+        self.run_calls = []
+        self.wait_calls = []
+
+    def _json_request(self, path, method="GET", payload=None, timeout=12.0):
+        if path == "/apply-template":
+            return HTTPResult(200, {}, b""), {"prompt": "fake-template"}
+        if path == "/tokenize":
+            return HTTPResult(200, {}, b""), {"tokens": [0] * self.token_count}
+        raise AssertionError(f"unexpected fake request: {method} {path}")
+
+    def probe_server(self):
+        if self.probes:
+            return self.probes.pop(0)
+        return ServerProbe(False, None, False, "fake", "no more probes")
+
+    def _run_restart(self, context):
+        self.run_calls.append(context)
+
+    def _wait_for_context(self, context, timeout=240.0):
+        self.wait_calls.append(context)
+        return ServerProbe(True, context, False, "fake")
+
+
+class FallbackRuntime(LocalBrainRuntime):
+    def __init__(self):
+        super().__init__(probe=False)
+
+    def _json_request(self, path, method="GET", payload=None, timeout=12.0):
+        raise LocalBrainRuntimeError("synthetic unavailable tokenizer")
+
+
 class LocalBrainRuntimeTests(unittest.TestCase):
     def test_apply_template_tokenize_and_image_reserve(self):
         runtime = FakeRuntime(token_count=12_000)
@@ -82,7 +122,7 @@ class LocalBrainRuntimeTests(unittest.TestCase):
 
     def test_max_ceiling_requests_compaction(self):
         runtime = FakeRuntime(token_count=120_000)
-        with self.assertRaises(ContextCapacityError):
+        with self.assertRaises(ContextCapacityError) as caught:
             runtime.prepare_chat_request(
                 {
                     "messages": [{"role": "user", "content": "too large"}],
@@ -91,6 +131,9 @@ class LocalBrainRuntimeTests(unittest.TestCase):
                 }
             )
         self.assertEqual(runtime.switches, [])
+        self.assertIn("Local Brain request exceeds the maximum physical context capacity", str(caught.exception))
+        self.assertNotIn("DSH", str(caught.exception))
+        self.assertEqual(caught.exception.error_code, "LOCAL_CONTEXT_COMPACTION_REQUIRED")
 
     def test_dsh_like_request_uses_tools_and_reasoning_reservation(self):
         runtime = FakeRuntime(token_count=13_000)
@@ -135,6 +178,78 @@ class LocalBrainRuntimeTests(unittest.TestCase):
             runtime.switch_context(98_304)
         self.assertEqual(runtime.run_calls, [98_304, 65_536])
         self.assertEqual(runtime.context.current_context, 65_536)
+
+    def test_stale_context_cache_forces_switch_to_target(self):
+        runtime = ProbeRuntime([ServerProbe(True, 131_072, False, "slots")])
+
+        runtime.switch_context(65_536)
+
+        self.assertEqual(runtime.run_calls, [65_536])
+        self.assertEqual(runtime.wait_calls, [65_536])
+        self.assertEqual(runtime.context.current_context, 65_536)
+
+    def test_healthy_matching_context_does_not_restart(self):
+        runtime = ProbeRuntime([ServerProbe(True, 65_536, False, "slots")])
+
+        runtime.switch_context(65_536)
+
+        self.assertEqual(runtime.run_calls, [])
+        self.assertEqual(runtime.wait_calls, [])
+        self.assertEqual(runtime.context.current_context, 65_536)
+
+    def test_dead_server_recovery_restarts_cached_target_before_request(self):
+        runtime = ProbeRuntime([ServerProbe(False, None, False, "none", "dead")])
+
+        prepared = runtime.prepare_chat_request(
+            {"messages": [{"role": "user", "content": "recover"}], "max_tokens": 50_000}
+        )
+
+        self.assertEqual(runtime.run_calls, [65_536])
+        self.assertEqual(runtime.wait_calls, [65_536])
+        self.assertEqual(prepared.decision.target_context, 65_536)
+        self.assertEqual(prepared.body["max_tokens"], 50_000)
+        self.assertEqual(runtime.context.current_context, 65_536)
+
+    def test_english_fallback_estimate_is_positive(self):
+        estimate = _fallback_text_token_estimate(
+            {"messages": [{"role": "user", "content": "hello"}], "tools": []}
+        )
+
+        self.assertGreater(estimate, 0)
+
+    def test_cjk_fallback_estimate_is_conservative(self):
+        body = {"messages": [{"role": "user", "content": "汉字" * 1_000}], "tools": []}
+        serialized_length = len(
+            json.dumps(
+                {"messages": body["messages"], "tools": body["tools"]},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+        old_estimate = max(1, (serialized_length + 3) // 4)
+
+        estimate = _fallback_text_token_estimate(body)
+
+        self.assertGreaterEqual(estimate, old_estimate * 3)
+
+    def test_image_base64_is_not_counted_in_fallback_text(self):
+        short_url = "data:image/png;base64,AA=="
+        long_url = "data:image/png;base64," + ("A" * 100_000)
+        short_body = {
+            "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": short_url}}]}]
+        }
+        long_body = {
+            "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": long_url}}]}]
+        }
+
+        short_estimate = _fallback_text_token_estimate(short_body)
+        long_estimate = _fallback_text_token_estimate(long_body)
+        runtime = FallbackRuntime()
+        prompt_estimate = runtime.estimate_prompt(long_body)
+
+        self.assertLessEqual(long_estimate - short_estimate, 20)
+        self.assertEqual(prompt_estimate.tokens, long_estimate + runtime.config.image_token_reserve)
+        self.assertEqual(prompt_estimate.image_count, 1)
 
 
 if __name__ == "__main__":

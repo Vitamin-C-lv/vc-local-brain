@@ -409,17 +409,18 @@ class ContextManager:
         idle = timestamp - self.last_request_at
         last_switch = self.last_switch_at if self.last_switch_at is not None else float("-inf")
         interval_ok = timestamp - last_switch >= self.config.active_demotion_min_interval_seconds
-        safe_for_demotion = required <= max(0, target - self.config.safety_margin_tokens)
+        # `required_context` already includes the completion reserve and the
+        # safety margin.  Do not subtract the margin a second time here.
+        safe_for_demotion = required <= target
 
         if idle >= self.config.idle_demote_seconds and safe_for_demotion:
             self._low_pressure_streak = 0
             return ContextDecision(required, current, target, "demote", "server_idle_long_enough")
 
-        lower_safe_limit = max(0, target - self.config.safety_margin_tokens)
         if (
             post_compaction
             and self._pressure_drop_eligible
-            and required <= lower_safe_limit * 0.80
+            and required <= target * 0.80
             and interval_ok
         ):
             self._low_pressure_streak += 1

@@ -93,6 +93,30 @@ class LocalBrainContextTests(unittest.TestCase):
         self.assertEqual(decision.action, "demote")
         self.assertEqual(decision.target_context, 65_536)
 
+    def test_c16_idle_demotion_uses_complete_required_budget(self):
+        now = [0.0]
+        manager = ContextManager(current_context=65_536, clock=lambda: now[0])
+        required = required_context_tokens(prompt_tokens=100, completion_reserve=4_096)
+        manager.record_request(100, required, now=0)
+
+        decision = manager.decision(required, now=901)
+
+        self.assertEqual(required, 12_388)
+        self.assertEqual(decision.action, "demote")
+        self.assertEqual(decision.target_context, 16_384)
+
+    def test_c16_idle_demotion_is_blocked_when_required_exceeds_c16(self):
+        now = [0.0]
+        manager = ContextManager(current_context=65_536, clock=lambda: now[0])
+        required = 16_385
+        manager.record_request(100, required, now=0)
+
+        decision = manager.decision(required, now=901)
+
+        self.assertEqual(decision.action, "demote")
+        self.assertEqual(decision.target_context, 32_768)
+        self.assertNotEqual(decision.target_context, 16_384)
+
     def test_post_compaction_demotion_has_hysteresis(self):
         now = [0.0]
         config = RuntimeConfig(active_demotion_min_interval_seconds=0)

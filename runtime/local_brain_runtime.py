@@ -146,12 +146,11 @@ def _without_image_payload(value: Any) -> Any:
         return [_without_image_payload(item) for item in value]
     if not isinstance(value, Mapping):
         return value
+    if value.get("type") in {"image_url", "image", "input_image"}:
+        # Keep only a small structural marker.  In particular, do not retain
+        # a data URL, base64 bytes, or an image `data` field in the text path.
+        return {"type": value.get("type"), "text": "[image]"}
     result = {key: _without_image_payload(item) for key, item in value.items()}
-    if result.get("type") in {"image_url", "image", "input_image"}:
-        if isinstance(result.get("image_url"), Mapping):
-            result["image_url"] = {"url": "[image]"}
-        result.pop("image", None)
-        result["text"] = "[image]"
     return result
 
 
@@ -159,7 +158,8 @@ def _fallback_text_token_estimate(body: Mapping[str, Any]) -> int:
     messages = _without_image_payload(body.get("messages", []))
     tools = _without_image_payload(body.get("tools", []))
     serialized = json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False, separators=(",", ":"))
-    return max(1, (len(serialized) + 3) // 4)
+    encoded_bytes = len(serialized.encode("utf-8"))
+    return max(1, (encoded_bytes + 1) // 2)
 
 
 class LocalBrainRuntime:
@@ -361,10 +361,9 @@ class LocalBrainRuntime:
             self.last_error = decision.reason
             raise ContextCapacityError(
                 f"Local Qwen request requires {required} tokens, above the {self.config.max_physical_context} token ceiling; "
-                "DSH Local Qwen compaction is required before retry"
+                "Local Brain request exceeds the maximum physical context capacity; "
+                "the caller must reduce or compact the input before retry."
             )
-        if decision.action in {"promote", "demote"} and decision.target_context is not None:
-            self.switch_context(decision.target_context)
         physical_context = decision.target_context or self.context.current_context
         try:
             effective_max_tokens = compute_effective_max_tokens(
@@ -386,6 +385,11 @@ class LocalBrainRuntime:
                 f"Local Qwen explicit max_tokens={requested} exceeds safe capacity for context "
                 f"{physical_context} (requires {required_explicit} tokens)"
             ) from error
+        # Probe the real server for every forward path.  This keeps the
+        # request alive when a server died while the cached manager state still
+        # names the desired tier, while switch_context remains the single
+        # restart/wait/rollback implementation.
+        self.ensure_server_available(physical_context)
         budget = self.output.begin_request(explicit_max_tokens, effective_max_tokens)
         self._set_output_budget(working, budget)
         self.context.record_request(estimate.tokens, required)
@@ -485,18 +489,25 @@ class LocalBrainRuntime:
             time.sleep(1.0)
         return last
 
+    def ensure_server_available(self, target_context: int) -> None:
+        """Ensure a healthy server is serving the requested physical tier."""
+        self.switch_context(target_context)
+
     def switch_context(self, target_context: int) -> None:
         with self.switch_lock:
-            old_context = self.context.current_context
-            if target_context == old_context:
-                return
             probe = self.refresh_server_state()
+            cached_context = self.context.current_context
+            actual_context = probe.context
+            old_context = actual_context if actual_context is not None else cached_context
+            if probe.healthy and actual_context == target_context and not probe.processing:
+                self.last_error = None
+                return
             if probe.processing:
                 raise ContextSwitchError("upstream llama-server is processing a request; context switch deferred")
             try:
                 self._run_restart(target_context)
                 ready = self._wait_for_context(target_context)
-                if not (ready.healthy and ready.context == target_context):
+                if not (ready.healthy and ready.context == target_context and not ready.processing):
                     raise ContextSwitchError(
                         f"target context {target_context} not ready; observed {ready.context!r} ({ready.error or 'no error'})"
                     )
@@ -510,7 +521,7 @@ class LocalBrainRuntime:
                 try:
                     self._run_restart(old_context)
                     rollback = self._wait_for_context(old_context)
-                    if rollback.healthy and rollback.context == old_context:
+                    if rollback.healthy and rollback.context == old_context and not rollback.processing:
                         self.context.current_context = old_context
                         self.server_healthy = True
                 except LocalBrainRuntimeError as rollback_error:
