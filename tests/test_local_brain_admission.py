@@ -203,6 +203,46 @@ class LocalBrainAdmissionTests(unittest.TestCase):
         self.assertEqual(executed, [])
         self.assertEqual(gate.status()["queue_depth"], 0)
 
+    def test_cancelled_head_waiter_cannot_win_active_handoff(self):
+        gate = RequestAdmissionGate(waiting_capacity=4)
+        cancel = threading.Event()
+        active_started = threading.Event()
+        release_active = threading.Event()
+        cancelled = threading.Event()
+        executed = []
+
+        def active_worker():
+            with gate.acquire():
+                active_started.set()
+                release_active.wait(2.0)
+
+        def queued_worker():
+            try:
+                with gate.acquire(cancelled=cancel.is_set):
+                    executed.append(True)
+            except RequestCancelledBeforeExecution:
+                cancelled.set()
+
+        active_thread = threading.Thread(target=active_worker)
+        queued_thread = threading.Thread(target=queued_worker)
+        active_thread.start()
+        self.assertTrue(active_started.wait(1.0))
+        queued_thread.start()
+        try:
+            self.assertTrue(wait_until(lambda: gate.status()["queue_depth"] == 1))
+            cancel.set()
+            release_active.set()
+            self.assertTrue(cancelled.wait(1.0))
+        finally:
+            cancel.set()
+            release_active.set()
+            active_thread.join(1.0)
+            queued_thread.join(1.0)
+
+        self.assertEqual(executed, [])
+        self.assertEqual(gate.status()["active_requests"], 0)
+        self.assertEqual(gate.status()["queue_depth"], 0)
+
     def test_truncated_body_rejected_before_forward(self):
         handler = Relay.__new__(Relay)
         handler.rfile = io.BytesIO(b"abc")

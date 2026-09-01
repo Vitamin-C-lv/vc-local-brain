@@ -108,14 +108,14 @@ class RequestAdmissionGate:
                 self._ticket_counter += 1
                 self._queue.append(ticket)
                 while True:
-                    if not self._active and self._queue and self._queue[0] == ticket:
-                        self._queue.popleft()
-                        self._active = True
-                        break
                     if cancelled is not None and cancelled():
                         self._queue.remove(ticket)
                         self._condition.notify_all()
                         raise RequestCancelledBeforeExecution()
+                    if not self._active and self._queue and self._queue[0] == ticket:
+                        self._queue.popleft()
+                        self._active = True
+                        break
                     self._condition.wait(ADMISSION_WAIT_INTERVAL_SECONDS)
         try:
             yield
