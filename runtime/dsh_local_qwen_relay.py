@@ -11,6 +11,8 @@ import io
 import json
 import logging
 import os
+import select
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -19,13 +21,38 @@ from urllib.parse import urlsplit
 from PIL import Image, UnidentifiedImageError
 
 from local_brain_context import REASONING_BUDGETS
-from local_brain_runtime import LocalBrainRuntime, LocalBrainRuntimeError
+from local_brain_runtime import (
+    LocalBrainRuntime,
+    LocalBrainRuntimeError,
+    QueueFullError,
+    RequestCancelledBeforeExecution,
+)
 
 UPSTREAM = os.environ.get("QWEN_UPSTREAM", "http://172.25.240.1:17861")
 HOP_BY_HOP = {"connection", "host", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
 DEBUG_REASONING = os.environ.get("QWEN_RELAY_DEBUG") == "1"
 LOG = logging.getLogger("dsh-local-qwen-relay")
 RUNTIME = None
+_BODY_NOT_READY = object()
+
+
+class IncompleteRequestBodyError(LocalBrainRuntimeError):
+    status_code = 400
+    error_code = "LOCAL_BRAIN_INCOMPLETE_REQUEST_BODY"
+    error_type = "invalid_request_error"
+
+
+def read_exact_body(stream, content_length):
+    """Read exactly Content-Length bytes, rejecting an early EOF."""
+    if content_length < 0:
+        raise IncompleteRequestBodyError("Content-Length must be non-negative")
+    body = stream.read(content_length) if content_length else b""
+    received = len(body) if body is not None else 0
+    if received != content_length:
+        raise IncompleteRequestBodyError(
+            f"incomplete request body: expected {content_length} bytes, received {received}"
+        )
+    return body
 
 
 def runtime():
@@ -139,11 +166,17 @@ class Relay(BaseHTTPRequestHandler):
             {
                 "error": {
                     "message": str(error),
-                    "type": "local_brain_runtime_error",
+                    "type": getattr(error, "error_type", "local_brain_runtime_error"),
                     "code": getattr(error, "error_code", "LOCAL_BRAIN_RUNTIME_ERROR"),
                 }
             },
         )
+
+    def _safe_send_runtime_error(self, error):
+        try:
+            self._send_runtime_error(error)
+        except OSError:
+            self.close_connection = True
 
     def _serve_status(self):
         try:
@@ -151,9 +184,46 @@ class Relay(BaseHTTPRequestHandler):
         except LocalBrainRuntimeError as error:
             self._send_runtime_error(error)
 
-    def _forward(self):
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length) if length else None
+    def _read_request_body(self):
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            return None
+        try:
+            length = int(raw_length)
+        except (TypeError, ValueError) as error:
+            raise IncompleteRequestBodyError(f"invalid Content-Length: {raw_length!r}") from error
+        return read_exact_body(self.rfile, length)
+
+    def _client_disconnected(self):
+        """Poll for an EOF without consuming a queued request's bytes."""
+        connection = getattr(self, "connection", None)
+        if connection is None:
+            return False
+        try:
+            readable, _, _ = select.select([connection], [], [], 0)
+        except (OSError, ValueError):
+            return True
+        if not readable:
+            return False
+        try:
+            return connection.recv(1, socket.MSG_PEEK) == b""
+        except (BlockingIOError, InterruptedError):
+            return False
+        except OSError:
+            return True
+
+    def _admit_and_forward(self, body=_BODY_NOT_READY):
+        try:
+            with runtime().request_slot(cancelled=self._client_disconnected):
+                self._forward(body)
+        except RequestCancelledBeforeExecution:
+            self.close_connection = True
+        except (QueueFullError, LocalBrainRuntimeError) as error:
+            self._safe_send_runtime_error(error)
+
+    def _forward(self, body=_BODY_NOT_READY):
+        if body is _BODY_NOT_READY:
+            body = self._read_request_body()
         headers = {key: value for key, value in self.headers.items() if key.lower() not in HOP_BY_HOP and key.lower() != "content-length"}
         translated = None
         request_mode = None
@@ -236,16 +306,18 @@ class Relay(BaseHTTPRequestHandler):
         if urlsplit(self.path).path == "/vc-local-brain/status":
             self._serve_status()
             return
-        with runtime().request_slot():
-            self._forward()
+        self._admit_and_forward()
 
     def do_POST(self):
-        with runtime().request_slot():
-            self._forward()
+        try:
+            body = self._read_request_body()
+        except LocalBrainRuntimeError as error:
+            self._safe_send_runtime_error(error)
+            return
+        self._admit_and_forward(body)
 
     def do_OPTIONS(self):
-        with runtime().request_slot():
-            self._forward()
+        self._admit_and_forward()
 
 
 if __name__ == "__main__":

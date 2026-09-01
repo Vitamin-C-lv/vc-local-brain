@@ -8,6 +8,7 @@ needed.
 
 from __future__ import annotations
 
+from collections import deque
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -42,6 +43,8 @@ from local_brain_context import (
 LOG = logging.getLogger("local-brain-runtime")
 DEFAULT_UPSTREAM = "http://172.25.240.1:17861"
 DEFAULT_RESTART_HELPER = "/mnt/d/VC-AI-Pet/runtime/Start-LocalQwen.ps1"
+DEFAULT_WAITING_QUEUE_CAPACITY = 4
+ADMISSION_WAIT_INTERVAL_SECONDS = 0.25
 MAX_OBSERVE_BYTES = 16 * 1024 * 1024
 
 
@@ -60,6 +63,86 @@ class ContextCapacityError(LocalBrainRuntimeError):
 class ContextSwitchError(LocalBrainRuntimeError):
     status_code = 503
     error_code = "LOCAL_CONTEXT_SWITCH_FAILED"
+
+
+class QueueFullError(LocalBrainRuntimeError):
+    status_code = 503
+    error_code = "LOCAL_BRAIN_QUEUE_FULL"
+
+    def __init__(self, message: str = "Local Brain request queue is full"):
+        super().__init__(message)
+
+
+class RequestCancelledBeforeExecution(Exception):
+    """A queued client disconnected before its request became active."""
+
+
+class RequestAdmissionGate:
+    """One active request plus a bounded FIFO queue.
+
+    The condition and ticket queue, rather than lock acquisition order, own
+    fairness.  A cancellation callback is checked while a request is waiting;
+    it is intentionally not consulted after the request becomes active.
+    """
+
+    def __init__(self, waiting_capacity: int = DEFAULT_WAITING_QUEUE_CAPACITY):
+        waiting_capacity = int(waiting_capacity)
+        if waiting_capacity < 0:
+            raise ValueError("waiting_capacity must be non-negative")
+        self.waiting_capacity = waiting_capacity
+        self._condition = threading.Condition()
+        self._queue: deque[int] = deque()
+        self._active = False
+        self._ticket_counter = 0
+
+    @contextmanager
+    def acquire(self, cancelled: Any = None) -> Iterator[None]:
+        ticket: int | None = None
+        with self._condition:
+            if not self._active and not self._queue:
+                self._active = True
+            else:
+                if len(self._queue) >= self.waiting_capacity:
+                    raise QueueFullError()
+                ticket = self._ticket_counter
+                self._ticket_counter += 1
+                self._queue.append(ticket)
+                while True:
+                    if not self._active and self._queue and self._queue[0] == ticket:
+                        self._queue.popleft()
+                        self._active = True
+                        break
+                    if cancelled is not None and cancelled():
+                        self._queue.remove(ticket)
+                        self._condition.notify_all()
+                        raise RequestCancelledBeforeExecution()
+                    self._condition.wait(ADMISSION_WAIT_INTERVAL_SECONDS)
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._active = False
+                self._condition.notify_all()
+
+    def status(self) -> dict[str, Any]:
+        with self._condition:
+            return {
+                "admission_mode": "bounded-fifo",
+                "active_requests": 1 if self._active else 0,
+                "queue_depth": len(self._queue),
+                "queue_capacity": self.waiting_capacity,
+                "max_active_requests": 1,
+            }
+
+
+def _configured_waiting_queue_capacity() -> int:
+    raw = os.environ.get("QWEN_QUEUE_CAPACITY")
+    if raw is None:
+        return DEFAULT_WAITING_QUEUE_CAPACITY
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_WAITING_QUEUE_CAPACITY
 
 
 @dataclass(frozen=True)
@@ -180,7 +263,7 @@ class LocalBrainRuntime:
         self.output = OutputBurstState(self.config)
         self.restart_helper = restart_helper or os.environ.get("QWEN_RESTART_HELPER", DEFAULT_RESTART_HELPER)
         self.log = logger or LOG
-        self.request_lock = threading.Lock()
+        self.admission_gate = RequestAdmissionGate(_configured_waiting_queue_capacity())
         self.switch_lock = threading.RLock()
         self.server_healthy = False
         self.server_probe_source = "unprobed"
@@ -201,9 +284,9 @@ class LocalBrainRuntime:
             self.refresh_server_state()
 
     @contextmanager
-    def request_slot(self) -> Iterator[None]:
-        """Serialize upstream requests because the physical server has one slot."""
-        with self.request_lock:
+    def request_slot(self, cancelled: Any = None) -> Iterator[None]:
+        """Admit one request to the single-slot physical server."""
+        with self.admission_gate.acquire(cancelled=cancelled):
             yield
 
     def _request(self, path: str, method: str = "GET", payload: Any = None, timeout: float = 12.0) -> HTTPResult:
@@ -609,16 +692,22 @@ class LocalBrainRuntime:
                 "last_error": self.last_error,
             }
         )
+        status.update(self.admission_gate.status())
         return status
 
 
 __all__ = [
+    "ADMISSION_WAIT_INTERVAL_SECONDS",
     "ContextCapacityError",
     "ContextSwitchError",
+    "DEFAULT_WAITING_QUEUE_CAPACITY",
     "HTTPResult",
     "LocalBrainRuntime",
     "LocalBrainRuntimeError",
     "PreparedRequest",
     "PromptEstimate",
+    "QueueFullError",
+    "RequestAdmissionGate",
+    "RequestCancelledBeforeExecution",
     "ServerProbe",
 ]
