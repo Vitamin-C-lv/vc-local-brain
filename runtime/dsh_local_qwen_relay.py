@@ -52,10 +52,13 @@ class IncompleteRequestBodyError(LocalBrainRuntimeError):
 
 
 class UpstreamRelayError(LocalBrainRuntimeError):
-    status_code = 502
     error_code = "LOCAL_BRAIN_UPSTREAM_ERROR"
     error_type = "upstream_error"
-    retryable = True
+
+    def __init__(self, message, *, status_code=502, retryable=True):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 def read_exact_body(stream, content_length):
@@ -281,6 +284,25 @@ class Relay(BaseHTTPRequestHandler):
             try:
                 response = urlopen(request, timeout=185)
             except HTTPError as error:
+                if urlsplit(self.path).path == "/v1/chat/completions":
+                    status = int(error.code)
+                    if 400 <= status < 500:
+                        public_error = UpstreamRelayError(
+                            "Local Brain backend rejected the request",
+                            status_code=status,
+                            retryable=False,
+                        )
+                    else:
+                        public_error = UpstreamRelayError(
+                            "Local Brain backend unavailable",
+                            status_code=status,
+                            retryable=True,
+                        )
+                    try:
+                        self._send_runtime_error(public_error)
+                    finally:
+                        error.close()
+                    return
                 response = error
             except Exception:
                 self._send_runtime_error(UpstreamRelayError("Local Brain backend unavailable"))
@@ -338,6 +360,9 @@ class Relay(BaseHTTPRequestHandler):
             body = self._read_request_body()
         except LocalBrainRuntimeError as error:
             self._safe_send_runtime_error(error)
+            return
+        if urlsplit(self.path).path == "/v1/chat/completions" and body is None:
+            self._safe_send_runtime_error(ContractError("chat completion request requires a JSON body"))
             return
         self._admit_and_forward(body)
 

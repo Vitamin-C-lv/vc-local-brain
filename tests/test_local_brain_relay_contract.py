@@ -2,6 +2,7 @@ import io
 import json
 from types import SimpleNamespace
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import Mock, patch
 
 import dsh_local_qwen_relay as relay_module
@@ -177,6 +178,104 @@ class RelayContractTests(unittest.TestCase):
         self.assertEqual(error["message"], "Local Brain backend unavailable")
         self.assertTrue(error["retryable"])
         self.assertNotIn("private gateway details", json.dumps(sent[0][1]))
+
+    def _run_chat_http_error(self, status):
+        sent = []
+        handler = CaptureRelay.build(
+            "/v1/chat/completions",
+            command="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        handler._send_json = lambda response_status, payload: sent.append((response_status, payload))
+        runtime = Mock()
+        runtime.prepare_chat_request.return_value = SimpleNamespace(
+            body={"model": BACKEND_MODEL_ALIAS, "messages": [{"role": "user", "content": "hi"}]},
+            budget=SimpleNamespace(mode=None),
+        )
+        detail = b'{"error":"Qwen private backend detail"}'
+        response_body = io.BytesIO(detail)
+        error = HTTPError(
+            "http://upstream.invalid/v1/chat/completions",
+            status,
+            "backend failure",
+            {"Content-Type": "application/json", "Content-Length": str(len(detail))},
+            response_body,
+        )
+
+        with patch.object(relay_module, "runtime", return_value=runtime), patch.object(
+            relay_module, "urlopen", side_effect=error
+        ):
+            handler._forward(
+                json.dumps(
+                    {"messages": [{"role": "user", "content": "hi"}]}
+                ).encode("utf-8")
+            )
+        return sent, response_body
+
+    def test_chat_upstream_http_400_uses_public_error_contract(self):
+        sent, response_body = self._run_chat_http_error(400)
+
+        self.assertEqual(sent[0][0], 400)
+        error = sent[0][1]["error"]
+        self.assertEqual(error["code"], "LOCAL_BRAIN_UPSTREAM_ERROR")
+        self.assertEqual(error["type"], "upstream_error")
+        self.assertEqual(error["message"], "Local Brain backend rejected the request")
+        self.assertFalse(error["retryable"])
+        self.assertNotIn("Qwen private backend detail", json.dumps(sent[0][1]))
+        self.assertTrue(response_body.closed)
+
+    def test_chat_upstream_http_503_uses_retryable_public_error_contract(self):
+        sent, response_body = self._run_chat_http_error(503)
+
+        self.assertEqual(sent[0][0], 503)
+        error = sent[0][1]["error"]
+        self.assertEqual(error["code"], "LOCAL_BRAIN_UPSTREAM_ERROR")
+        self.assertEqual(error["type"], "upstream_error")
+        self.assertEqual(error["message"], "Local Brain backend unavailable")
+        self.assertTrue(error["retryable"])
+        self.assertNotIn("Qwen private backend detail", json.dumps(sent[0][1]))
+        self.assertTrue(response_body.closed)
+
+    def test_chat_missing_content_length_is_rejected_before_runtime_or_upstream(self):
+        sent = []
+        handler = CaptureRelay.build("/v1/chat/completions", command="POST")
+        handler._send_json = lambda status, payload: sent.append((status, payload))
+        runtime = Mock()
+        upstream = Mock()
+
+        with patch.object(relay_module, "runtime", return_value=runtime), patch.object(
+            relay_module, "urlopen", upstream
+        ):
+            handler.do_POST()
+
+        self.assertEqual(sent[0][0], 400)
+        error = sent[0][1]["error"]
+        self.assertEqual(error["code"], "LOCAL_BRAIN_INVALID_REQUEST")
+        self.assertFalse(error["retryable"])
+        runtime.assert_not_called()
+        upstream.assert_not_called()
+
+    def test_non_chat_http_error_remains_proxied(self):
+        handler = CaptureRelay.build("/v1/models")
+        sent = []
+        handler._send_json = lambda status, payload: sent.append((status, payload))
+        detail = b'{"error":"Qwen private backend detail"}'
+        response_body = io.BytesIO(detail)
+        error = HTTPError(
+            "http://upstream.invalid/v1/models",
+            400,
+            "backend failure",
+            {"Content-Type": "application/json", "Content-Length": str(len(detail))},
+            response_body,
+        )
+
+        with patch.object(relay_module, "urlopen", side_effect=error):
+            handler._forward()
+
+        self.assertEqual(handler.sent_statuses, [400])
+        self.assertEqual(handler.wfile.getvalue(), detail)
+        self.assertEqual(sent, [])
+        self.assertTrue(response_body.closed)
 
 
 if __name__ == "__main__":
