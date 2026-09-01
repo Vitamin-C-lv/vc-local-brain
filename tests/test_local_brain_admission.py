@@ -277,7 +277,8 @@ class LocalBrainAdmissionTests(unittest.TestCase):
             handler._forward()
 
         self.assertEqual(upstream.call_count, 1)
-        self.assertEqual(sent[0][1]["error"]["code"], "LOCAL_QWEN_UPSTREAM_ERROR")
+        self.assertEqual(sent[0][1]["error"]["code"], "LOCAL_BRAIN_UPSTREAM_ERROR")
+        self.assertTrue(sent[0][1]["error"]["retryable"])
 
 
 if __name__ == "__main__":

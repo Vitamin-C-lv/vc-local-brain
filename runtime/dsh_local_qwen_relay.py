@@ -21,6 +21,15 @@ from urllib.parse import urlsplit
 from PIL import Image, UnidentifiedImageError
 
 from local_brain_context import REASONING_BUDGETS
+from local_brain_contract import (
+    ContractError,
+    REQUEST_ID_HEADER,
+    new_request_id,
+    normalize_chat_request,
+    public_error_payload,
+    public_health,
+    public_status,
+)
 from local_brain_runtime import (
     LocalBrainRuntime,
     LocalBrainRuntimeError,
@@ -40,6 +49,13 @@ class IncompleteRequestBodyError(LocalBrainRuntimeError):
     status_code = 400
     error_code = "LOCAL_BRAIN_INCOMPLETE_REQUEST_BODY"
     error_type = "invalid_request_error"
+
+
+class UpstreamRelayError(LocalBrainRuntimeError):
+    status_code = 502
+    error_code = "LOCAL_BRAIN_UPSTREAM_ERROR"
+    error_type = "upstream_error"
+    retryable = True
 
 
 def read_exact_body(stream, content_length):
@@ -149,11 +165,19 @@ class Relay(BaseHTTPRequestHandler):
     def log_message(self, _format, *_args):
         pass
 
+    def _request_id_value(self):
+        value = getattr(self, "_local_brain_request_id", None)
+        if value is None:
+            value = new_request_id()
+            self._local_brain_request_id = value
+        return value
+
     def _send_json(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header(REQUEST_ID_HEADER, self._request_id_value())
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
@@ -161,16 +185,7 @@ class Relay(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def _send_runtime_error(self, error):
-        self._send_json(
-            getattr(error, "status_code", 503),
-            {
-                "error": {
-                    "message": str(error),
-                    "type": getattr(error, "error_type", "local_brain_runtime_error"),
-                    "code": getattr(error, "error_code", "LOCAL_BRAIN_RUNTIME_ERROR"),
-                }
-            },
-        )
+        self._send_json(getattr(error, "status_code", 503), public_error_payload(error))
 
     def _safe_send_runtime_error(self, error):
         try:
@@ -180,8 +195,18 @@ class Relay(BaseHTTPRequestHandler):
 
     def _serve_status(self):
         try:
-            self._send_json(200, runtime().status())
-        except LocalBrainRuntimeError as error:
+            current_runtime = runtime()
+            current_runtime.refresh_server_state()
+            self._send_json(200, public_status(current_runtime.status()))
+        except (ContractError, LocalBrainRuntimeError) as error:
+            self._send_runtime_error(error)
+
+    def _serve_health(self):
+        try:
+            probe = runtime().refresh_server_state()
+            status, payload = public_health(probe.healthy)
+            self._send_json(status, payload)
+        except (ContractError, LocalBrainRuntimeError) as error:
             self._send_runtime_error(error)
 
     def _read_request_body(self):
@@ -218,7 +243,7 @@ class Relay(BaseHTTPRequestHandler):
                 self._forward(body)
         except RequestCancelledBeforeExecution:
             self.close_connection = True
-        except (QueueFullError, LocalBrainRuntimeError) as error:
+        except (ContractError, QueueFullError, LocalBrainRuntimeError) as error:
             self._safe_send_runtime_error(error)
 
     def _forward(self, body=_BODY_NOT_READY):
@@ -230,19 +255,19 @@ class Relay(BaseHTTPRequestHandler):
         streamed = False
         payload = None
         try:
-            if body and urlsplit(self.path).path == "/v1/chat/completions":
+            if body is not None and urlsplit(self.path).path == "/v1/chat/completions":
                 try:
                     payload = json.loads(body)
                 except (TypeError, ValueError):
-                    payload = None
-                if isinstance(payload, dict):
-                    normalize_llama_images(payload)
-                    translated = apply_qwen35_reasoning(payload)
-                    prepared = runtime().prepare_chat_request(payload)
-                    payload = prepared.body
-                    request_mode = prepared.budget.mode
-                    streamed = bool(payload.get("stream"))
-                    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                    raise ContractError("request body must be valid JSON")
+                payload = normalize_chat_request(payload)
+                normalize_llama_images(payload)
+                translated = apply_qwen35_reasoning(payload)
+                prepared = runtime().prepare_chat_request(payload)
+                payload = prepared.body
+                request_mode = prepared.budget.mode
+                streamed = bool(payload.get("stream"))
+                body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
             if body is not None:
                 headers["Content-Length"] = str(len(body))
@@ -257,26 +282,22 @@ class Relay(BaseHTTPRequestHandler):
                 response = urlopen(request, timeout=185)
             except HTTPError as error:
                 response = error
-            except Exception as error:
-                self._send_json(
-                    502,
-                    {
-                        "error": {
-                            "message": f"Windows llama-server relay error: {error}",
-                            "type": "upstream_error",
-                            "code": "LOCAL_QWEN_UPSTREAM_ERROR",
-                        }
-                    },
-                )
+            except Exception:
+                self._send_runtime_error(UpstreamRelayError("Local Brain backend unavailable"))
                 return
             with response:
                 self.send_response(response.status)
                 for key, value in response.headers.items():
-                    if key.lower() not in HOP_BY_HOP and key.lower() != "content-length":
+                    if (
+                        key.lower() not in HOP_BY_HOP
+                        and key.lower() != "content-length"
+                        and key.lower() != REQUEST_ID_HEADER.lower()
+                    ):
                         self.send_header(key, value)
                 content_length = response.headers.get("Content-Length")
                 if content_length is not None:
                     self.send_header("Content-Length", content_length)
+                self.send_header(REQUEST_ID_HEADER, self._request_id_value())
                 self.send_header("Connection", "close")
                 self.end_headers()
                 observed = bytearray()
@@ -299,11 +320,15 @@ class Relay(BaseHTTPRequestHandler):
             if request_mode is not None:
                 runtime().observe_response(bytes(observed), request_mode, streamed)
             self.close_connection = True
-        except LocalBrainRuntimeError as error:
+        except (ContractError, LocalBrainRuntimeError) as error:
             self._send_runtime_error(error)
 
     def do_GET(self):
-        if urlsplit(self.path).path == "/vc-local-brain/status":
+        path = urlsplit(self.path).path
+        if path == "/health":
+            self._serve_health()
+            return
+        if path == "/vc-local-brain/status":
             self._serve_status()
             return
         self._admit_and_forward()
