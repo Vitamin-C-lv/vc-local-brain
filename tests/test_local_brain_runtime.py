@@ -19,6 +19,9 @@ class FakeRuntime(LocalBrainRuntime):
         self.token_count = token_count
         self.switches = []
 
+    def probe_server(self):
+        return ServerProbe(True, self.context.current_context, False, "fake")
+
     def _json_request(self, path, method="GET", payload=None, timeout=12.0):
         if path == "/apply-template":
             return HTTPResult(200, {}, b""), {"prompt": "fake-template"}
@@ -195,6 +198,36 @@ class LocalBrainRuntimeTests(unittest.TestCase):
 
         self.assertEqual(runtime.run_calls, [])
         self.assertEqual(runtime.wait_calls, [])
+        self.assertEqual(runtime.context.current_context, 65_536)
+
+    def test_policy_uses_actual_physical_context_before_decision(self):
+        runtime = ProbeRuntime(
+            [
+                ServerProbe(True, 131_072, False, "slots"),
+                ServerProbe(True, 131_072, False, "slots"),
+            ],
+            token_count=100,
+        )
+
+        prepared = runtime.prepare_chat_request({"messages": [{"role": "user", "content": "tiny"}]})
+
+        self.assertEqual(prepared.decision.action, "keep")
+        self.assertEqual(prepared.decision.current_context, 131_072)
+        self.assertEqual(prepared.decision.target_context, 131_072)
+        self.assertEqual(runtime.context.current_context, 131_072)
+        self.assertEqual(runtime.run_calls, [])
+
+    def test_dead_policy_falls_back_to_last_known_c64_before_recovery(self):
+        runtime = ProbeRuntime([ServerProbe(False, None, False, "none", "dead")], token_count=1_000)
+
+        prepared = runtime.prepare_chat_request(
+            {"messages": [{"role": "user", "content": "recover"}], "max_tokens": 50_000}
+        )
+
+        self.assertEqual(prepared.decision.action, "keep")
+        self.assertEqual(prepared.decision.current_context, 65_536)
+        self.assertEqual(prepared.decision.target_context, 65_536)
+        self.assertEqual(runtime.run_calls, [65_536])
         self.assertEqual(runtime.context.current_context, 65_536)
 
     def test_dead_server_recovery_restarts_cached_target_before_request(self):

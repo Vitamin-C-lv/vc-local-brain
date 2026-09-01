@@ -356,6 +356,10 @@ class LocalBrainRuntime:
             completion_reserve=completion_reserve,
             safety_margin=self.config.safety_margin_tokens,
         )
+        # Policy must use the actual physical server context.  A dead probe
+        # reports no context and refresh_server_state deliberately preserves
+        # the manager's last-known context for the policy fallback.
+        self.refresh_server_state()
         decision = self.context.decision(required)
         if decision.action == "compact":
             self.last_error = decision.reason
