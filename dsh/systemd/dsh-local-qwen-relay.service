@@ -1,0 +1,9 @@
+# This is a transient unit file, created programmatically via the systemd API. Do not edit.
+[Unit]
+Description=[systemd-run] /usr/bin/python3 /home/vitamin_c/Documents/Codex/2026-08-31/kali-dsh-windows-qwen3-5-4b/work/dsh_local_qwen_relay.py
+
+[Service]
+Restart=always
+RestartSec=2s
+ExecStart=
+ExecStart="/usr/bin/python3" "/home/vitamin_c/Documents/Codex/2026-08-31/kali-dsh-windows-qwen3-5-4b/work/dsh_local_qwen_relay.py"
