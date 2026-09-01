@@ -1,0 +1,8 @@
+# Local Qwen-only Engineering Protocol v1.
+# The implementation is an ordinary system-prompt assemble listener; it does
+# not replace the DSH persona, alter tools, or change any runtime policy.
+- insert:
+    - id: dsh-local-qwen-engineering-protocol
+      name: 'dsh-local-qwen-engineering-protocol'
+      config:
+        enabled: true

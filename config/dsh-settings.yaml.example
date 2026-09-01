@@ -1,0 +1,31 @@
+# Credential-free example for the Local Qwen route.
+# Keep any real credential in the DSH credential/runtime secret store.
+agent-default-model:
+  provider: local-qwen
+  model: li-huahua-local
+  reasoningEffort: max
+
+llm-pi-ai:
+  providers:
+    local-qwen:
+      displayName: Local Qwen3.5-4B
+      api: openai-completions
+      baseURL: http://127.0.0.1:17862/v1
+      compat:
+        supportsDeveloperRole: false
+        supportsReasoningEffort: true
+        maxTokensField: max_tokens
+      reasoning: off
+      models:
+        - id: li-huahua-local
+          name: Qwen3.5-4B Q4_K_M (Local)
+          contextWindow: 131072
+          input:
+            - text
+            - image
+          reasoningEfforts:
+            off: off
+            low: low
+            medium: medium
+            high: high
+            max: max

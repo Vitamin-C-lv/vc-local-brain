@@ -1,0 +1,22 @@
+{
+  "name": "dsh-local-qwen-engineering-protocol",
+  "version": "0.1.0",
+  "description": "Local Qwen-only system prompt overlay for DSH Engineering Protocol v1",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

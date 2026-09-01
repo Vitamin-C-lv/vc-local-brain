@@ -1,0 +1,15 @@
+# Apply this policy only to the exact Local Qwen route.
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  disabled: false
+  config:
+    auto: false
+    thresholdRatio: 0.8
+    retainRatio: 0.16
+    maxTokens: 8192
+    modelPolicies:
+      - provider: local-qwen
+        model: li-huahua-local
+        thresholdRatio: 0.68
+        retainRatio: 0.15
+        maxTokens: 8192

@@ -1,0 +1,17 @@
+{
+  "physical_context_tiers": [16384, 32768, 65536, 98304, 131072],
+  "reasoning": {"off": 0, "low": 512, "medium": 2048, "high": 8192, "max": 16384},
+  "safety_margin_tokens": 8192,
+  "max_physical_context": 131072,
+  "image": {
+    "token_reserve": 2048,
+    "calibrated": true,
+    "calibration_note": "1448x1086 character-reference.png: measured prompt delta 1532 tokens; ceil(delta * 1.20) rounded up to 2048."
+  },
+  "demotion": {
+    "idle_seconds": 900,
+    "active_min_interval_seconds": 180,
+    "pressure_threshold": 80000,
+    "streak": 2
+  }
+}
