@@ -1,6 +1,6 @@
 # Current source state
 
-This document records the accepted Local Qwen source contract at mirror
+This document records the accepted Local Brain source contract at mirror
 publication time. It is not a live health check and does not contain runtime
 state.
 
@@ -35,6 +35,9 @@ LEGACY_LOCAL_COMPACTION_MODEL=li-huahua-local
 EXPECTED_POST_COMPACTION_PROMPT=~48K
 EXPECTED_POST_COMPACTION_TIER=C96
 ENGINEERING_PROTOCOL=v1 experimental
+ENGINEERING_PROTOCOL_MODEL_VISIBLE_HEADING=Local Brain Engineering Protocol
+ENGINEERING_PROTOCOL_PLUGIN_DIRECTORY=dsh-local-qwen-engineering-protocol (compatibility)
+ENGINEERING_PROTOCOL_OVERLAY_SECTION=local-qwen:engineering-protocol (compatibility)
 OLD_REASONING_REPLAYED_IN_COMPACTION=YES
 OLD_HUGE_TOOL_RESULTS_REPLAYED=YES
 OLD_IMAGES_REPROCESSED=YES
@@ -49,9 +52,11 @@ QWEN_RESTART_HELPER=/mnt/d/VC-AI-Pet/runtime/Start-LocalQwen.ps1
 ```
 
 The Engineering Protocol overlay is installed for the formal Local Brain route
-and the exact Local Qwen compatibility route. The Memory Garden acceptance work
-exposed patch-loop and false-pass limitations; further changes are frozen
-pending source review.
+and the exact Local Qwen compatibility route. Its model-visible heading is
+`# Local Brain Engineering Protocol`. The plugin directory, registration name,
+and `local-qwen:engineering-protocol` section retain their historical
+compatibility identifiers. The Memory Garden acceptance work exposed patch-loop
+and false-pass limitations; further changes are frozen pending source review.
 
 The current DSH default is the public `local-brain/local-brain-v1` identity.
 The exact `local-qwen/li-huahua-local` pair remains available as a legacy

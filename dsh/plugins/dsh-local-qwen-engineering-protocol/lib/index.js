@@ -9,7 +9,7 @@ const OVERLAY_SECTION = "local-qwen:engineering-protocol";
  * supplements the assembled DSH prompt and never replaces the base persona,
  * tool guidance, memory policy, sandbox policy, or agent policy.
  */
-export const LOCAL_QWEN_ENGINEERING_PROTOCOL = String.raw`# Local Qwen Engineering Protocol
+export const LOCAL_BRAIN_ENGINEERING_PROTOCOL = String.raw`# Local Brain Engineering Protocol
 
 For non-trivial engineering tasks, optimize for correctness,
 long-horizon progress, and evidence-backed decisions rather than
@@ -216,7 +216,7 @@ export function isLocalBrainRoute(provider, model) {
  * section, and a Local Brain assembly contains it exactly once for either
  * the formal or legacy compatibility route.
  */
-export function appendLocalQwenOverlay(assembly) {
+export function appendLocalBrainOverlay(assembly) {
   const existing = assembly.sections.filter((section) => section.name === OVERLAY_SECTION);
   const baseSections = assembly.sections.filter((section) => section.name !== OVERLAY_SECTION);
   const active = isLocalBrainRoute(assembly.variables?.provider, assembly.variables?.model);
@@ -231,7 +231,7 @@ export function appendLocalQwenOverlay(assembly) {
       {
         name: OVERLAY_SECTION,
         order: 900,
-        text: LOCAL_QWEN_ENGINEERING_PROTOCOL
+        text: LOCAL_BRAIN_ENGINEERING_PROTOCOL
       }
     ]
   };
@@ -244,7 +244,7 @@ export function apply(ctx, config = {}) {
   if (config.enabled === false) return;
   ctx.on("system-prompt/assemble", async (assembly, _context, next) => {
     const assembled = await next();
-    return appendLocalQwenOverlay(assembled);
+    return appendLocalBrainOverlay(assembled);
   });
 }
 

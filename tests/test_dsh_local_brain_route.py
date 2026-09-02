@@ -97,23 +97,23 @@ const source = fs.readFileSync(
   "utf8"
 );
 const module = await import(`data:text/javascript,${encodeURIComponent(source)}`);
-const formal = module.appendLocalQwenOverlay({
+const formal = module.appendLocalBrainOverlay({
   sections: [],
   variables: { provider: "local-brain", model: "local-brain-v1" }
 });
-const legacy = module.appendLocalQwenOverlay({
+const legacy = module.appendLocalBrainOverlay({
   sections: [],
   variables: { provider: "local-qwen", model: "li-huahua-local" }
 });
-const deepseek = module.appendLocalQwenOverlay({
+const deepseek = module.appendLocalBrainOverlay({
   sections: [],
   variables: { provider: "deepseek", model: "DeepSeek-V4-Pro" }
 });
-const wrongModel = module.appendLocalQwenOverlay({
+const wrongModel = module.appendLocalBrainOverlay({
   sections: [],
   variables: { provider: "local-brain", model: "other-model" }
 });
-const repeated = module.appendLocalQwenOverlay(formal);
+const repeated = module.appendLocalBrainOverlay(formal);
 console.log(JSON.stringify({
   formalExact: module.isLocalBrainRoute("local-brain", "local-brain-v1"),
   legacyExact: module.isLocalBrainRoute("local-qwen", "li-huahua-local"),
@@ -121,7 +121,13 @@ console.log(JSON.stringify({
   legacySections: legacy.sections.length,
   formalSectionName: formal.sections[0]?.name,
   legacySectionName: legacy.sections[0]?.name,
-  protocolHeading: formal.sections[0]?.text.startsWith("# Local Qwen Engineering Protocol"),
+  formalHeadingLocalBrain: formal.sections[0]?.text.startsWith("# Local Brain Engineering Protocol"),
+  legacyHeadingLocalBrain: legacy.sections[0]?.text.startsWith("# Local Brain Engineering Protocol"),
+  modelVisibleLocalQwenHeadingAbsent: !formal.sections.some((section) => section.text.includes("# Local Qwen Engineering Protocol"))
+    && !legacy.sections.some((section) => section.text.includes("# Local Qwen Engineering Protocol")),
+  formalOverlayCount: formal.sections.filter((section) => section.name === "local-qwen:engineering-protocol").length,
+  legacyOverlayCount: legacy.sections.filter((section) => section.name === "local-qwen:engineering-protocol").length,
+  deepseekOverlayCount: deepseek.sections.filter((section) => section.name === "local-qwen:engineering-protocol").length,
   deepseekSections: deepseek.sections.length,
   wrongModelSections: wrongModel.sections.length,
   repeatedSections: repeated.sections.length,
@@ -177,23 +183,30 @@ console.log(JSON.stringify({
         self.assertTrue(result["formalExact"])
         self.assertEqual(result["formalSections"], 1)
         self.assertEqual(result["formalSectionName"], "local-qwen:engineering-protocol")
-        self.assertTrue(result["protocolHeading"])
+        self.assertTrue(result["formalHeadingLocalBrain"])
+        self.assertEqual(result["formalOverlayCount"], 1)
+        self.assertTrue(result["modelVisibleLocalQwenHeadingAbsent"])
 
     def test_engineering_protocol_matches_legacy_route(self):
         result = self._engineering_protocol_harness()
         self.assertTrue(result["legacyExact"])
         self.assertEqual(result["legacySections"], 1)
         self.assertEqual(result["legacySectionName"], "local-qwen:engineering-protocol")
+        self.assertTrue(result["legacyHeadingLocalBrain"])
+        self.assertEqual(result["legacyOverlayCount"], 1)
+        self.assertTrue(result["modelVisibleLocalQwenHeadingAbsent"])
 
     def test_engineering_protocol_rejects_deepseek_and_wrong_routes(self):
         result = self._engineering_protocol_harness()
         self.assertEqual(result["deepseekSections"], 0)
         self.assertEqual(result["wrongModelSections"], 0)
         self.assertFalse(result["oldPredicatePresent"])
+        self.assertFalse(result["deepseekOverlayCount"])
 
     def test_engineering_protocol_remains_idempotent(self):
         result = self._engineering_protocol_harness()
         self.assertEqual(result["repeatedSections"], 1)
+        self.assertNotIn("appendLocalQwenOverlay", self.protocol_source)
         self.assertIn("This protocol supplements them and does not replace them.", self.protocol_source)
 
     def test_compaction_formal_policy_values_are_exact(self):
