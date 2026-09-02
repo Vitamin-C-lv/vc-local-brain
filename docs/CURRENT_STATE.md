@@ -7,6 +7,9 @@ state.
 ```text
 MODEL_ALIAS=li-huahua-local
 MODEL_DISPLAY=Qwen3.5-4B Q4_K_M (Local)
+DSH_COMPAT_ROUTE=provider=local-qwen model=li-huahua-local
+PUBLIC_LOCAL_BRAIN_API_MODEL=local-brain-v1
+BACKEND_MODEL_ALIAS=li-huahua-local
 CONTEXT_TIERS=16384,32768,65536,98304,131072
 GLOBAL_MAX_CONTEXT=131072
 CLIENT_SPECIFIC_POLICY=NONE
@@ -44,3 +47,10 @@ QWEN_RESTART_HELPER=/mnt/d/VC-AI-Pet/runtime/Start-LocalQwen.ps1
 The Engineering Protocol overlay is installed for the exact Local Qwen route
 only. The Memory Garden acceptance work exposed patch-loop and false-pass
 limitations; further changes are frozen pending source review.
+
+The current DSH route is a compatibility identity for the exact
+`local-qwen/li-huahua-local` backend pair. The public Local Brain API identity
+is `local-brain-v1`; a later D2 migration may move callers to that public
+identity without changing the backend alias documented above. The
+`LOCAL_COMPACTION_*` fields describe DSH's upper-layer conversation
+compaction policy, not the Local Brain Runtime policy.

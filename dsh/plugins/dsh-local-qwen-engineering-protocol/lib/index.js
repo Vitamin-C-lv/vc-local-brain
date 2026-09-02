@@ -1,5 +1,5 @@
-const LOCAL_QWEN_PROVIDER = "local-qwen";
-const LOCAL_QWEN_MODEL = "li-huahua-local";
+const LOCAL_BRAIN_PROVIDER = "local-qwen";
+const LOCAL_BRAIN_MODEL = "li-huahua-local";
 const OVERLAY_SECTION = "local-qwen:engineering-protocol";
 
 /**
@@ -202,9 +202,9 @@ memory policy, tool rules, and agent policy remain authoritative.
 
 This protocol supplements them and does not replace them.`;
 
-/** True only for the one production Local Qwen route covered by this overlay. */
-export function isLocalQwenRoute(provider, model) {
-  return provider === LOCAL_QWEN_PROVIDER && model === LOCAL_QWEN_MODEL;
+/** True only for the one production Local Brain route covered by this overlay. */
+export function isLocalBrainRoute(provider, model) {
+  return provider === LOCAL_BRAIN_PROVIDER && model === LOCAL_BRAIN_MODEL;
 }
 
 /**
@@ -215,7 +215,7 @@ export function isLocalQwenRoute(provider, model) {
 export function appendLocalQwenOverlay(assembly) {
   const existing = assembly.sections.filter((section) => section.name === OVERLAY_SECTION);
   const baseSections = assembly.sections.filter((section) => section.name !== OVERLAY_SECTION);
-  const active = isLocalQwenRoute(assembly.variables?.provider, assembly.variables?.model);
+  const active = isLocalBrainRoute(assembly.variables?.provider, assembly.variables?.model);
   if (!active) {
     return existing.length === 0 ? assembly : { ...assembly, sections: baseSections };
   }

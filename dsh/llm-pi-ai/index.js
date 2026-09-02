@@ -1548,14 +1548,22 @@ function profileOptions(profile, reasoning, apiKey) {
 		maxRetries: 0
 	};
 }
+const LOCAL_BRAIN_PROVIDER = "local-qwen";
+const LOCAL_BRAIN_MODEL = "li-huahua-local";
+
+/** True only for the production Local Brain compatibility route. */
+function isLocalBrainRoute(provider, model) {
+	return provider === LOCAL_BRAIN_PROVIDER && model === LOCAL_BRAIN_MODEL;
+}
+
 /**
 * The pi-ai simple-stream seam uses model.maxTokens as its fallback wire
-* value.  For the Local Qwen route that value describes capability only: the
+* value.  For the Local Brain route that value describes capability only: the
 * relay must calculate a request-based safe max after choosing physical
 * context.  Remove only this adapter-inherited value; a caller-supplied
 * maxTokens remains in the payload and therefore keeps explicit semantics.
 */
-function dropLocalQwenInheritedMaxTokens(params) {
+function dropLocalBrainInheritedMaxTokens(params) {
 	const payload = { ...params };
 	delete payload.max_tokens;
 	delete payload.max_completion_tokens;
@@ -1752,7 +1760,7 @@ var PiAiAdapter = class extends LlmAdapter {
 					...profileOptions(profile, reasoning, apiKey),
 					...options.temperature === void 0 ? {} : { temperature: options.temperature },
 					...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens },
-					...options.provider === "local-qwen" && model.api === "openai-completions" && options.maxTokens === void 0 ? { onPayload: dropLocalQwenInheritedMaxTokens } : {},
+					...isLocalBrainRoute(options.provider, options.model) && model.api === "openai-completions" && options.maxTokens === void 0 ? { onPayload: dropLocalBrainInheritedMaxTokens } : {},
 					...options.sessionId === void 0 ? {} : { sessionId: String(options.sessionId) },
 					signal: watchdog.signal,
 					headers: requestHeaders(profile.headers)
