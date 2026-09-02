@@ -1,5 +1,7 @@
 const LOCAL_BRAIN_PROVIDER = "local-qwen";
 const LOCAL_BRAIN_MODEL = "li-huahua-local";
+const FORMAL_LOCAL_BRAIN_PROVIDER = "local-brain";
+const FORMAL_LOCAL_BRAIN_MODEL = "local-brain-v1";
 const OVERLAY_SECTION = "local-qwen:engineering-protocol";
 
 /**
@@ -202,15 +204,17 @@ memory policy, tool rules, and agent policy remain authoritative.
 
 This protocol supplements them and does not replace them.`;
 
-/** True only for the one production Local Brain route covered by this overlay. */
+/** True for the formal Local Brain route and its legacy compatibility route. */
 export function isLocalBrainRoute(provider, model) {
-  return provider === LOCAL_BRAIN_PROVIDER && model === LOCAL_BRAIN_MODEL;
+  return provider === FORMAL_LOCAL_BRAIN_PROVIDER && model === FORMAL_LOCAL_BRAIN_MODEL
+    || provider === LOCAL_BRAIN_PROVIDER && model === LOCAL_BRAIN_MODEL;
 }
 
 /**
  * Pure assembly transform used by the live listener and static tests.
  * Repeated calls are idempotent; a DeepSeek assembly cannot retain this
- * section, and a Local Qwen assembly contains it exactly once.
+ * section, and a Local Brain assembly contains it exactly once for either
+ * the formal or legacy compatibility route.
  */
 export function appendLocalQwenOverlay(assembly) {
   const existing = assembly.sections.filter((section) => section.name === OVERLAY_SECTION);

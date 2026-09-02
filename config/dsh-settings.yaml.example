@@ -1,12 +1,41 @@
-# Credential-free example for the Local Qwen route.
+# Credential-free example for the public Local Brain route.
 # Keep any real credential in the DSH credential/runtime secret store.
 agent-default-model:
-  provider: local-qwen
-  model: li-huahua-local
+  provider: local-brain
+  model: local-brain-v1
   reasoningEffort: max
 
 llm-pi-ai:
   providers:
+    local-brain:
+      displayName: Local Brain
+      api: openai-completions
+      baseURL: http://127.0.0.1:17862/v1
+      # The loopback relay ignores this non-secret placeholder; the
+      # OpenAI-compatible adapter still requires an auth-shaped header.
+      headers:
+        Authorization: Bearer local-brain
+      compat:
+        supportsDeveloperRole: false
+        supportsReasoningEffort: true
+        maxTokensField: max_tokens
+      reasoning: off
+      timeoutMs: 180000
+      models:
+        - id: local-brain-v1
+          name: Local Brain v1
+          contextWindow: 131072
+          input:
+            - text
+            - image
+          reasoningEfforts:
+            off: off
+            low: low
+            medium: medium
+            high: high
+            max: max
+
+    # Legacy route retained for existing sessions and compatibility checks.
     local-qwen:
       displayName: Local Qwen3.5-4B
       api: openai-completions

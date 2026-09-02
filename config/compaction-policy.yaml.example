@@ -1,4 +1,4 @@
-# Apply this policy only to the exact Local Qwen route.
+# Apply these policies only to the exact Local Brain routes.
 - id: compaction-basic
   name: '@deepseek-ai/dsh-compaction-basic'
   disabled: false
@@ -8,6 +8,11 @@
     retainRatio: 0.16
     maxTokens: 8192
     modelPolicies:
+      - provider: local-brain
+        model: local-brain-v1
+        thresholdRatio: 0.68
+        retainRatio: 0.15
+        maxTokens: 8192
       - provider: local-qwen
         model: li-huahua-local
         thresholdRatio: 0.68

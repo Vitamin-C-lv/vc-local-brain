@@ -1550,10 +1550,12 @@ function profileOptions(profile, reasoning, apiKey) {
 }
 const LOCAL_BRAIN_PROVIDER = "local-qwen";
 const LOCAL_BRAIN_MODEL = "li-huahua-local";
+const FORMAL_LOCAL_BRAIN_PROVIDER = "local-brain";
+const FORMAL_LOCAL_BRAIN_MODEL = "local-brain-v1";
 
-/** True only for the production Local Brain compatibility route. */
+/** True for the formal Local Brain route and its legacy compatibility route. */
 function isLocalBrainRoute(provider, model) {
-	return provider === LOCAL_BRAIN_PROVIDER && model === LOCAL_BRAIN_MODEL;
+	return provider === FORMAL_LOCAL_BRAIN_PROVIDER && model === FORMAL_LOCAL_BRAIN_MODEL || provider === LOCAL_BRAIN_PROVIDER && model === LOCAL_BRAIN_MODEL;
 }
 
 /**
